@@ -5,17 +5,12 @@
 #include "esp_flash.h"
 #include "esp_system.h"
 #include "esp_log.h"
-#include "esp_mac.h"
-#include "esp_timer.h"
-#include "esp_event.h"
-#include "freertos/task.h"
 #include "freertos/FreeRTOS.h"
+#include "freertos/task.h"
 #include "nvs_flash.h"
 #include "sdkconfig.h"
 
-#include "mqtt_manager.h"
 #include "sensor_dht22.h"
-#include "wifi_manager.h"
 
 static const char* TAG = "TEMP_HUMID_MONITOR";
 
@@ -23,7 +18,7 @@ extern "C" void app_main(void)
 {
     ESP_LOGI(TAG, "Application starting...");
     
-    // Initialize NVS (required for WiFi)
+    // Initialize NVS (required for Zigbee)
     esp_err_t ret = nvs_flash_init();
     if (ret == ESP_ERR_NVS_NO_FREE_PAGES || ret == ESP_ERR_NVS_NEW_VERSION_FOUND) {
         ESP_ERROR_CHECK(nvs_flash_erase());
@@ -31,39 +26,8 @@ extern "C" void app_main(void)
     }
     ESP_ERROR_CHECK(ret);
     
-    // Initialize WiFi
-    ESP_LOGI(TAG, "Initializing WiFi...");
-    wifi_init();
-    
-    // Wait for WiFi connection (timeout 15s)
-    TickType_t start = xTaskGetTickCount();
-    const TickType_t timeout = pdMS_TO_TICKS(15000);
-    while (!wifi_is_connected() && (xTaskGetTickCount() - start) < timeout) {
-        vTaskDelay(pdMS_TO_TICKS(200));
-    }
-    
-    if (wifi_is_connected()) {
-        ESP_LOGI(TAG, "Connected to WiFi");
-        
-        // Initialize MQTT
-        ESP_LOGI(TAG, "Initializing MQTT...");
-        mqtt_init();
-        
-        // Wait for MQTT connection (timeout 10s)
-        TickType_t mqtt_start = xTaskGetTickCount();
-        const TickType_t mqtt_timeout = pdMS_TO_TICKS(10000);
-        while (!mqtt_is_connected() && (xTaskGetTickCount() - mqtt_start) < mqtt_timeout) {
-            vTaskDelay(pdMS_TO_TICKS(500));
-        }
-
-        if (mqtt_is_connected()) {
-            ESP_LOGI(TAG, "MQTT connection established");
-        } else {
-            ESP_LOGW(TAG, "MQTT connection timeout");
-        }
-    } else {
-        ESP_LOGE(TAG, "Failed to connect to WiFi");
-    }
+    // TODO: Initialize Zigbee stack here
+    ESP_LOGI(TAG, "Zigbee initialization - TO BE IMPLEMENTED");
     
     // Print detailed chip information
     esp_chip_info_t chip_info;
@@ -83,11 +47,12 @@ extern "C" void app_main(void)
     while (true) {
         // Read DHT22 every 30 seconds (15 cycles)
         if (count % 15 == 0) {
-            sensor_dht22_read(&temperature, &humidity);
-            
-            // Publish sensor data
-            if (mqtt_is_connected()) {
-                mqtt_publish_sensor(temperature, humidity);
+            esp_err_t ret = sensor_dht22_read(&temperature, &humidity);
+            if (ret == ESP_OK) {
+                ESP_LOGI(TAG, "Temperature: %.1f°C, Humidity: %.1f%%", temperature, humidity);
+                // TODO: Update Zigbee attributes here
+            } else {
+                ESP_LOGW(TAG, "Failed to read DHT22 sensor");
             }
         }
         
