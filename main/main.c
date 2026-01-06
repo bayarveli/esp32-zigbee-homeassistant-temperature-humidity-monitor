@@ -76,6 +76,17 @@ static int16_t zb_temperature_to_s16(float temp)
 //     }
 // }
 
+static void esp_app_humidity_sensor_handler(float humidity)
+{
+    uint16_t measured_value = (uint16_t)(humidity * 100);
+    /* Update humidity sensor measured value */
+    esp_zb_lock_acquire(portMAX_DELAY);
+    esp_zb_zcl_set_attribute_val(HA_ESP_SENSOR_ENDPOINT,
+        ESP_ZB_ZCL_CLUSTER_ID_REL_HUMIDITY_MEASUREMENT, ESP_ZB_ZCL_CLUSTER_SERVER_ROLE,
+        ESP_ZB_ZCL_ATTR_REL_HUMIDITY_MEASUREMENT_VALUE_ID, &measured_value, false);
+    esp_zb_lock_release();
+}
+
 static void esp_app_temp_sensor_handler(float temperature)
 {
     int16_t measured_value = zb_temperature_to_s16(temperature);
@@ -112,15 +123,21 @@ static esp_err_t deferred_driver_init(void)
 static void fake_sensor_task(void *pvParameters)
 {
     float temperature = 20.0f;
+    float humidity = 50.0f;
 
     while (true) {
         temperature += 0.5f;
         if (temperature > 30.0f) {
             temperature = 15.0f;
         }
+        humidity += 0.3f;
+        if (humidity > 80.0f) {
+            humidity = 40.0f;
+        }
 
-        ESP_LOGI(TAG, "Simulated temperature: %.1f°C", temperature);
+        ESP_LOGI(TAG, "Temp: %.1f°C, Humidity: %.1f%%", temperature, humidity);
         esp_app_temp_sensor_handler(temperature);
+        esp_app_humidity_sensor_handler(humidity);
 
         vTaskDelay(pdMS_TO_TICKS(5000));
     }
@@ -175,20 +192,30 @@ void esp_zb_app_signal_handler(esp_zb_app_signal_t *signal_struct)
     }
 }
 
-static esp_zb_cluster_list_t *custom_temperature_sensor_clusters_create(esp_zb_temperature_sensor_cfg_t *temperature_sensor)
+static esp_zb_cluster_list_t *custom_sensor_clusters_create(esp_zb_temperature_sensor_cfg_t *temp_cfg, esp_zb_humidity_meas_cluster_cfg_t *humidity_cfg)
 {
     esp_zb_cluster_list_t *cluster_list = esp_zb_zcl_cluster_list_create();
-    esp_zb_attribute_list_t *basic_cluster = esp_zb_basic_cluster_create(&(temperature_sensor->basic_cfg));
+    
+    /* Add basic cluster with device info */
+    esp_zb_attribute_list_t *basic_cluster = esp_zb_basic_cluster_create(&(temp_cfg->basic_cfg));
     ESP_ERROR_CHECK(esp_zb_basic_cluster_add_attr(basic_cluster, ESP_ZB_ZCL_ATTR_BASIC_MANUFACTURER_NAME_ID, (void*)MANUFACTURER_NAME));
     ESP_ERROR_CHECK(esp_zb_basic_cluster_add_attr(basic_cluster, ESP_ZB_ZCL_ATTR_BASIC_MODEL_IDENTIFIER_ID, (void*)MODEL_IDENTIFIER));
     ESP_ERROR_CHECK(esp_zb_cluster_list_add_basic_cluster(cluster_list, basic_cluster, ESP_ZB_ZCL_CLUSTER_SERVER_ROLE));
-    ESP_ERROR_CHECK(esp_zb_cluster_list_add_identify_cluster(cluster_list, esp_zb_identify_cluster_create(&(temperature_sensor->identify_cfg)), ESP_ZB_ZCL_CLUSTER_SERVER_ROLE));
+    
+    /* Add identify cluster */
+    ESP_ERROR_CHECK(esp_zb_cluster_list_add_identify_cluster(cluster_list, esp_zb_identify_cluster_create(&(temp_cfg->identify_cfg)), ESP_ZB_ZCL_CLUSTER_SERVER_ROLE));
     ESP_ERROR_CHECK(esp_zb_cluster_list_add_identify_cluster(cluster_list, esp_zb_zcl_attr_list_create(ESP_ZB_ZCL_CLUSTER_ID_IDENTIFY), ESP_ZB_ZCL_CLUSTER_CLIENT_ROLE));
-    ESP_ERROR_CHECK(esp_zb_cluster_list_add_temperature_meas_cluster(cluster_list, esp_zb_temperature_meas_cluster_create(&(temperature_sensor->temp_meas_cfg)), ESP_ZB_ZCL_CLUSTER_SERVER_ROLE));
+    
+    /* Add temperature measurement cluster */
+    ESP_ERROR_CHECK(esp_zb_cluster_list_add_temperature_meas_cluster(cluster_list, esp_zb_temperature_meas_cluster_create(&(temp_cfg->temp_meas_cfg)), ESP_ZB_ZCL_CLUSTER_SERVER_ROLE));
+    
+    /* Add humidity measurement cluster */
+    ESP_ERROR_CHECK(esp_zb_cluster_list_add_humidity_meas_cluster(cluster_list, esp_zb_humidity_meas_cluster_create(humidity_cfg), ESP_ZB_ZCL_CLUSTER_SERVER_ROLE));
+    
     return cluster_list;
 }
 
-static esp_zb_ep_list_t *custom_temperature_sensor_ep_create(uint8_t endpoint_id, esp_zb_temperature_sensor_cfg_t *temperature_sensor)
+static esp_zb_ep_list_t *custom_sensor_ep_create(uint8_t endpoint_id, esp_zb_temperature_sensor_cfg_t *temp_cfg, esp_zb_humidity_meas_cluster_cfg_t *humidity_cfg)
 {
     esp_zb_ep_list_t *ep_list = esp_zb_ep_list_create();
     esp_zb_endpoint_config_t endpoint_config = {
@@ -197,7 +224,7 @@ static esp_zb_ep_list_t *custom_temperature_sensor_ep_create(uint8_t endpoint_id
         .app_device_id = ESP_ZB_HA_TEMPERATURE_SENSOR_DEVICE_ID,
         .app_device_version = 0
     };
-    esp_zb_ep_list_add_ep(ep_list, custom_temperature_sensor_clusters_create(temperature_sensor), endpoint_config);
+    esp_zb_ep_list_add_ep(ep_list, custom_sensor_clusters_create(temp_cfg, humidity_cfg), endpoint_config);
     return ep_list;
 }
 
@@ -207,17 +234,25 @@ static void esp_zb_task(void *pvParameters)
     esp_zb_cfg_t zb_nwk_cfg = ESP_ZB_ZED_CONFIG();
     esp_zb_init(&zb_nwk_cfg);
 
-    /* Create customized temperature sensor endpoint */
-    esp_zb_temperature_sensor_cfg_t sensor_cfg = ESP_ZB_DEFAULT_TEMPERATURE_SENSOR_CONFIG();
-    /* Set (Min|Max)MeasuredValure */
-    sensor_cfg.temp_meas_cfg.min_value = zb_temperature_to_s16(ESP_TEMP_SENSOR_MIN_VALUE);
-    sensor_cfg.temp_meas_cfg.max_value = zb_temperature_to_s16(ESP_TEMP_SENSOR_MAX_VALUE);
-    esp_zb_ep_list_t *esp_zb_sensor_ep = custom_temperature_sensor_ep_create(HA_ESP_SENSOR_ENDPOINT, &sensor_cfg);
+    /* Create customized multi-sensor endpoint */
+    
+    /* Configure temperature sensor */
+    esp_zb_temperature_sensor_cfg_t temp_cfg = ESP_ZB_DEFAULT_TEMPERATURE_SENSOR_CONFIG();
+    temp_cfg.temp_meas_cfg.min_value = zb_temperature_to_s16(ESP_TEMP_SENSOR_MIN_VALUE);
+    temp_cfg.temp_meas_cfg.max_value = zb_temperature_to_s16(ESP_TEMP_SENSOR_MAX_VALUE);
+    
+    /* Configure humidity sensor */
+    esp_zb_humidity_meas_cluster_cfg_t humidity_cfg = {
+        .min_value = 0,
+        .max_value = 10000,  /* 0-100% humidity in ZCL format (0.01% steps) */
+    };
+    
+    esp_zb_ep_list_t *esp_zb_sensor_ep = custom_sensor_ep_create(HA_ESP_SENSOR_ENDPOINT, &temp_cfg, &humidity_cfg);
 
     /* Register the device */
     esp_zb_device_register(esp_zb_sensor_ep);
 
-    /* Config the reporting info  */
+    /* Config the reporting info for temperature */
     esp_zb_zcl_reporting_info_t reporting_info = {
         .direction = ESP_ZB_ZCL_CMD_DIRECTION_TO_SRV,
         .ep = HA_ESP_SENSOR_ENDPOINT,
@@ -234,6 +269,24 @@ static void esp_zb_task(void *pvParameters)
     };
 
     esp_zb_zcl_update_reporting_info(&reporting_info);
+
+    /* Config the reporting info for humidity */
+    esp_zb_zcl_reporting_info_t humidity_reporting_info = {
+        .direction = ESP_ZB_ZCL_CMD_DIRECTION_TO_SRV,
+        .ep = HA_ESP_SENSOR_ENDPOINT,
+        .cluster_id = ESP_ZB_ZCL_CLUSTER_ID_REL_HUMIDITY_MEASUREMENT,
+        .cluster_role = ESP_ZB_ZCL_CLUSTER_SERVER_ROLE,
+        .dst.profile_id = ESP_ZB_AF_HA_PROFILE_ID,
+        .u.send_info.min_interval = 1,
+        .u.send_info.max_interval = 0,
+        .u.send_info.def_min_interval = 1,
+        .u.send_info.def_max_interval = 0,
+        .u.send_info.delta.u16 = 100,
+        .attr_id = ESP_ZB_ZCL_ATTR_REL_HUMIDITY_MEASUREMENT_VALUE_ID,
+        .manuf_code = ESP_ZB_ZCL_ATTR_NON_MANUFACTURER_SPECIFIC,
+    };
+
+    esp_zb_zcl_update_reporting_info(&humidity_reporting_info);
     esp_zb_set_primary_network_channel_set(ESP_ZB_PRIMARY_CHANNEL_MASK);
     ESP_ERROR_CHECK(esp_zb_start(false));
 
