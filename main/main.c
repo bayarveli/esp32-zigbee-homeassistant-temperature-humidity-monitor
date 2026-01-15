@@ -237,11 +237,11 @@ static void esp_zb_task(void *pvParameters)
         .cluster_id = ESP_ZB_ZCL_CLUSTER_ID_TEMP_MEASUREMENT,
         .cluster_role = ESP_ZB_ZCL_CLUSTER_SERVER_ROLE,
         .dst.profile_id = ESP_ZB_AF_HA_PROFILE_ID,
-        .u.send_info.min_interval = 1,
-        .u.send_info.max_interval = 0,
-        .u.send_info.def_min_interval = 1,
-        .u.send_info.def_max_interval = 0,
-        .u.send_info.delta.u16 = 100,
+        .u.send_info.min_interval = 60,      /* Wait at least 60s between reports */
+        .u.send_info.max_interval = 3600,    /* Force report every hour */
+        .u.send_info.def_min_interval = 60,
+        .u.send_info.def_max_interval = 3600,
+        .u.send_info.delta.u16 = 50,         /* Report on 0.5°C change */
         .attr_id = ESP_ZB_ZCL_ATTR_TEMP_MEASUREMENT_VALUE_ID,
         .manuf_code = ESP_ZB_ZCL_ATTR_NON_MANUFACTURER_SPECIFIC,
     };
@@ -255,11 +255,11 @@ static void esp_zb_task(void *pvParameters)
         .cluster_id = ESP_ZB_ZCL_CLUSTER_ID_REL_HUMIDITY_MEASUREMENT,
         .cluster_role = ESP_ZB_ZCL_CLUSTER_SERVER_ROLE,
         .dst.profile_id = ESP_ZB_AF_HA_PROFILE_ID,
-        .u.send_info.min_interval = 1,
-        .u.send_info.max_interval = 0,
-        .u.send_info.def_min_interval = 1,
-        .u.send_info.def_max_interval = 0,
-        .u.send_info.delta.u16 = 100,
+        .u.send_info.min_interval = 60,      /* Wait at least 60s between reports */
+        .u.send_info.max_interval = 3600,    /* Force report every hour */
+        .u.send_info.def_min_interval = 60,
+        .u.send_info.def_max_interval = 3600,
+        .u.send_info.delta.u16 = 50,         /* Report on 0.5% humidity change */
         .attr_id = ESP_ZB_ZCL_ATTR_REL_HUMIDITY_MEASUREMENT_VALUE_ID,
         .manuf_code = ESP_ZB_ZCL_ATTR_NON_MANUFACTURER_SPECIFIC,
     };
