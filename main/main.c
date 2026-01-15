@@ -22,8 +22,8 @@ static const char* TAG = "ZIGBEE_TEMP_HUMID_MONITOR";
 #define ESP_ZB_PRIMARY_CHANNEL_MASK     ESP_ZB_TRANSCEIVER_ALL_CHANNELS_MASK    /* Zigbee primary channel mask use in the example */
 
 #define ESP_TEMP_SENSOR_UPDATE_INTERVAL (1)     /* Local sensor update interval (second) */
-#define ESP_TEMP_SENSOR_MIN_VALUE       (-10)   /* Local sensor min measured value (degree Celsius) */
-#define ESP_TEMP_SENSOR_MAX_VALUE       (80)    /* Local sensor max measured value (degree Celsius) */
+#define ESP_TEMP_SENSOR_MIN_VALUE       (-40)   /* BME280 min temperature (degree Celsius) */
+#define ESP_TEMP_SENSOR_MAX_VALUE       (85)    /* BME280 max temperature (degree Celsius) */
 
 /* I2C and BME280 configuration */
 #define I2C_MASTER_SCL_IO               2       /* GPIO2 for I2C SCL */
@@ -86,6 +86,17 @@ static void esp_app_temp_sensor_handler(float temperature)
     esp_zb_zcl_set_attribute_val(HA_ESP_SENSOR_ENDPOINT,
         ESP_ZB_ZCL_CLUSTER_ID_TEMP_MEASUREMENT, ESP_ZB_ZCL_CLUSTER_SERVER_ROLE,
         ESP_ZB_ZCL_ATTR_TEMP_MEASUREMENT_VALUE_ID, &measured_value, false);
+    esp_zb_lock_release();
+}
+
+static void esp_app_pressure_sensor_handler(float pressure)
+{
+    int16_t measured_value = (int16_t)pressure;  /* ZCL format: pressure in hPa */
+    /* Update pressure sensor measured value */
+    esp_zb_lock_acquire(portMAX_DELAY);
+    esp_zb_zcl_set_attribute_val(HA_ESP_SENSOR_ENDPOINT,
+        ESP_ZB_ZCL_CLUSTER_ID_PRESSURE_MEASUREMENT, ESP_ZB_ZCL_CLUSTER_SERVER_ROLE,
+        ESP_ZB_ZCL_ATTR_PRESSURE_MEASUREMENT_VALUE_ID, &measured_value, false);
     esp_zb_lock_release();
 }
 
@@ -156,6 +167,7 @@ static void bme280_sensor_task(void *pvParameters)
             /* Update Zigbee attributes */
             esp_app_temp_sensor_handler(temperature);
             esp_app_humidity_sensor_handler(humidity);
+            esp_app_pressure_sensor_handler(pressure);
         } else {
             ESP_LOGW(TAG, "Failed to read BME280 sensor");
         }
@@ -213,7 +225,7 @@ void esp_zb_app_signal_handler(esp_zb_app_signal_t *signal_struct)
     }
 }
 
-static esp_zb_cluster_list_t *custom_sensor_clusters_create(esp_zb_temperature_sensor_cfg_t *temp_cfg, esp_zb_humidity_meas_cluster_cfg_t *humidity_cfg)
+static esp_zb_cluster_list_t *custom_sensor_clusters_create(esp_zb_temperature_sensor_cfg_t *temp_cfg, esp_zb_humidity_meas_cluster_cfg_t *humidity_cfg, esp_zb_pressure_meas_cluster_cfg_t *pressure_cfg)
 {
     esp_zb_cluster_list_t *cluster_list = esp_zb_zcl_cluster_list_create();
     
@@ -233,10 +245,13 @@ static esp_zb_cluster_list_t *custom_sensor_clusters_create(esp_zb_temperature_s
     /* Add humidity measurement cluster */
     ESP_ERROR_CHECK(esp_zb_cluster_list_add_humidity_meas_cluster(cluster_list, esp_zb_humidity_meas_cluster_create(humidity_cfg), ESP_ZB_ZCL_CLUSTER_SERVER_ROLE));
     
+    /* Add pressure measurement cluster */
+    ESP_ERROR_CHECK(esp_zb_cluster_list_add_pressure_meas_cluster(cluster_list, esp_zb_pressure_meas_cluster_create(pressure_cfg), ESP_ZB_ZCL_CLUSTER_SERVER_ROLE));
+    
     return cluster_list;
 }
 
-static esp_zb_ep_list_t *custom_sensor_ep_create(uint8_t endpoint_id, esp_zb_temperature_sensor_cfg_t *temp_cfg, esp_zb_humidity_meas_cluster_cfg_t *humidity_cfg)
+static esp_zb_ep_list_t *custom_sensor_ep_create(uint8_t endpoint_id, esp_zb_temperature_sensor_cfg_t *temp_cfg, esp_zb_humidity_meas_cluster_cfg_t *humidity_cfg, esp_zb_pressure_meas_cluster_cfg_t *pressure_cfg)
 {
     esp_zb_ep_list_t *ep_list = esp_zb_ep_list_create();
     esp_zb_endpoint_config_t endpoint_config = {
@@ -245,7 +260,7 @@ static esp_zb_ep_list_t *custom_sensor_ep_create(uint8_t endpoint_id, esp_zb_tem
         .app_device_id = ESP_ZB_HA_TEMPERATURE_SENSOR_DEVICE_ID,
         .app_device_version = 0
     };
-    esp_zb_ep_list_add_ep(ep_list, custom_sensor_clusters_create(temp_cfg, humidity_cfg), endpoint_config);
+    esp_zb_ep_list_add_ep(ep_list, custom_sensor_clusters_create(temp_cfg, humidity_cfg, pressure_cfg), endpoint_config);
     return ep_list;
 }
 
@@ -268,7 +283,13 @@ static void esp_zb_task(void *pvParameters)
         .max_value = 10000,  /* 0-100% humidity in ZCL format (0.01% steps) */
     };
     
-    esp_zb_ep_list_t *esp_zb_sensor_ep = custom_sensor_ep_create(HA_ESP_SENSOR_ENDPOINT, &temp_cfg, &humidity_cfg);
+    /* Configure pressure sensor */
+    esp_zb_pressure_meas_cluster_cfg_t pressure_cfg = {
+        .min_value = 3000,   /* 300 hPa (0.1 hPa steps) - BME280 minimum */
+        .max_value = 11000,  /* 1100 hPa - BME280 maximum */
+    };
+    
+    esp_zb_ep_list_t *esp_zb_sensor_ep = custom_sensor_ep_create(HA_ESP_SENSOR_ENDPOINT, &temp_cfg, &humidity_cfg, &pressure_cfg);
 
     /* Register the device */
     esp_zb_device_register(esp_zb_sensor_ep);
@@ -308,6 +329,24 @@ static void esp_zb_task(void *pvParameters)
     };
 
     esp_zb_zcl_update_reporting_info(&humidity_reporting_info);
+
+    /* Config the reporting info for pressure */
+    esp_zb_zcl_reporting_info_t pressure_reporting_info = {
+        .direction = ESP_ZB_ZCL_CMD_DIRECTION_TO_SRV,
+        .ep = HA_ESP_SENSOR_ENDPOINT,
+        .cluster_id = ESP_ZB_ZCL_CLUSTER_ID_PRESSURE_MEASUREMENT,
+        .cluster_role = ESP_ZB_ZCL_CLUSTER_SERVER_ROLE,
+        .dst.profile_id = ESP_ZB_AF_HA_PROFILE_ID,
+        .u.send_info.min_interval = 60,      /* Wait at least 60s between reports */
+        .u.send_info.max_interval = 3600,    /* Force report every hour */
+        .u.send_info.def_min_interval = 60,
+        .u.send_info.def_max_interval = 3600,
+        .u.send_info.delta.u16 = 10,         /* Report on 1 hPa change */
+        .attr_id = ESP_ZB_ZCL_ATTR_PRESSURE_MEASUREMENT_VALUE_ID,
+        .manuf_code = ESP_ZB_ZCL_ATTR_NON_MANUFACTURER_SPECIFIC,
+    };
+
+    esp_zb_zcl_update_reporting_info(&pressure_reporting_info);
     esp_zb_set_primary_network_channel_set(ESP_ZB_PRIMARY_CHANNEL_MASK);
     ESP_ERROR_CHECK(esp_zb_start(false));
 
