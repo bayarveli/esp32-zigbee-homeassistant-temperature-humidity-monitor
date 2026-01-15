@@ -306,32 +306,4 @@ void app_main(void)
 
     /* Start fake sensor task */
     xTaskCreate(fake_sensor_task, "Fake_Sensor", 2048, NULL, 4, NULL);
-    
-    // // Main operation loop
-    // int counter = 0;
-    // float demo_temperature = 20.5f;
-    // float demo_humidity = 45.0f;
-    
-    // while (true) {
-    //     if (zigbee_is_connected()) {
-    //         // Simulate sensor reading (replace with real sensor data later)
-    //         demo_temperature += 0.1f;
-    //         demo_humidity -= 0.05f;
-            
-    //         // Ensure values stay in realistic ranges
-    //         if (demo_temperature > 30.0f) demo_temperature = 20.0f;
-    //         if (demo_humidity < 30.0f) demo_humidity = 50.0f;
-            
-    //         // Update Zigbee attributes
-    //         zigbee_update_temperature(demo_temperature);
-    //         zigbee_update_humidity(demo_humidity);
-            
-    //         ESP_LOGI(TAG, "Sent: Temp=%.1f°C, Humidity=%.1f%%", demo_temperature, demo_humidity);
-    //     } else {
-    //         ESP_LOGW(TAG, "Not connected to Zigbee network");
-    //     }
-        
-    //     counter++;
-    //     vTaskDelay(pdMS_TO_TICKS(10000));  // 10 second delay
-    // }
 }
