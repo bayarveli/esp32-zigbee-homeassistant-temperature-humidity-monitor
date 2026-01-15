@@ -9,6 +9,8 @@
 #include "sdkconfig.h"
 #include "ha/esp_zigbee_ha_standard.h"
 #include "esp_zigbee_core.h"
+#include "bme280.h"
+#include "i2c_bus.h"
 
 static const char* TAG = "ZIGBEE_TEMP_HUMID_MONITOR";
 
@@ -22,6 +24,13 @@ static const char* TAG = "ZIGBEE_TEMP_HUMID_MONITOR";
 #define ESP_TEMP_SENSOR_UPDATE_INTERVAL (1)     /* Local sensor update interval (second) */
 #define ESP_TEMP_SENSOR_MIN_VALUE       (-10)   /* Local sensor min measured value (degree Celsius) */
 #define ESP_TEMP_SENSOR_MAX_VALUE       (80)    /* Local sensor max measured value (degree Celsius) */
+
+/* I2C and BME280 configuration */
+#define I2C_MASTER_SCL_IO               2       /* GPIO2 for I2C SCL */
+#define I2C_MASTER_SDA_IO               1       /* GPIO1 for I2C SDA */
+#define I2C_MASTER_NUM                  I2C_NUM_0
+#define I2C_MASTER_FREQ_HZ              400000  /* 400kHz */
+#define BME280_I2C_ADDRESS              0x76    /* BME280 I2C address (SDO to GND) */
 
 /* Attribute values in ZCL string format
  * The string should be started with the length of its own.
@@ -49,6 +58,10 @@ static const char* TAG = "ZIGBEE_TEMP_HUMID_MONITOR";
         .host_connection_mode = ZB_HOST_CONNECTION_MODE_NONE,   \
     }
 
+/* I2C and BME280 handles */
+static i2c_bus_handle_t i2c_bus_handle = NULL;
+static bme280_handle_t bme280_handle = NULL;
+static bool bme280_ready = false;  /* Indicates BME280 is initialized and ready */
 static int16_t zb_temperature_to_s16(float temp)
 {
     return (int16_t)(temp * 100);
@@ -85,39 +98,69 @@ static void bdb_start_top_level_commissioning_cb(uint8_t mode_mask)
 static esp_err_t deferred_driver_init(void)
 {
     static bool is_inited = false;
-    // temperature_sensor_config_t temp_sensor_config =
-    //     TEMPERATURE_SENSOR_CONFIG_DEFAULT(ESP_TEMP_SENSOR_MIN_VALUE, ESP_TEMP_SENSOR_MAX_VALUE);
     if (!is_inited) {
-        // ESP_RETURN_ON_ERROR(
-        //     temp_sensor_driver_init(&temp_sensor_config, ESP_TEMP_SENSOR_UPDATE_INTERVAL, esp_app_temp_sensor_handler),
-        //     TAG, "Failed to initialize temperature sensor");
-        // ESP_RETURN_ON_FALSE(switch_driver_init(button_func_pair, PAIR_SIZE(button_func_pair), esp_app_buttons_handler),
-        //                     ESP_FAIL, TAG, "Failed to initialize switch driver");
+        /* Initialize I2C bus using i2c_bus API (compatible with BME280 library) */
+        i2c_config_t i2c_conf = {
+            .mode = I2C_MODE_MASTER,
+            .sda_io_num = I2C_MASTER_SDA_IO,
+            .sda_pullup_en = GPIO_PULLUP_ENABLE,
+            .scl_io_num = I2C_MASTER_SCL_IO,
+            .scl_pullup_en = GPIO_PULLUP_ENABLE,
+            .master.clk_speed = I2C_MASTER_FREQ_HZ,
+        };
+
+        i2c_bus_handle = i2c_bus_create(I2C_MASTER_NUM, &i2c_conf);
+        if (i2c_bus_handle == NULL) {
+            ESP_LOGE(TAG, "Failed to create I2C bus");
+            return ESP_FAIL;
+        }
+
+        /* Initialize BME280 */
+        bme280_handle = bme280_create(i2c_bus_handle, BME280_I2C_ADDRESS);
+        if (bme280_handle == NULL) {
+            ESP_LOGE(TAG, "Failed to create BME280 handle");
+            return ESP_FAIL;
+        }
+
+        ESP_RETURN_ON_ERROR(bme280_default_init(bme280_handle), TAG, "Failed to initialize BME280");
+        ESP_LOGI(TAG, "BME280 initialized successfully");
+        bme280_ready = true;  /* Mark as ready for reading */
         is_inited = true;
     }
     return is_inited ? ESP_OK : ESP_FAIL;
 }
 
-static void fake_sensor_task(void *pvParameters)
+static void bme280_sensor_task(void *pvParameters)
 {
-    float temperature = 20.0f;
-    float humidity = 50.0f;
+    /* Wait for BME280 to be fully initialized and ready */
+    while (!bme280_ready) {
+        vTaskDelay(pdMS_TO_TICKS(100));
+    }
+
+    /* Extra delay to ensure BME280 is fully stabilized */
+    vTaskDelay(pdMS_TO_TICKS(500));
+
+    ESP_LOGI(TAG, "BME280 sensor task started");
 
     while (true) {
-        temperature += 0.5f;
-        if (temperature > 30.0f) {
-            temperature = 15.0f;
-        }
-        humidity += 0.3f;
-        if (humidity > 80.0f) {
-            humidity = 40.0f;
-        }
+        float temperature = 0.0f, humidity = 0.0f, pressure = 0.0f;
 
-        ESP_LOGI(TAG, "Temp: %.1f°C, Humidity: %.1f%%", temperature, humidity);
-        esp_app_temp_sensor_handler(temperature);
-        esp_app_humidity_sensor_handler(humidity);
+        /* Read sensor values */
+        if (bme280_read_temperature(bme280_handle, &temperature) == ESP_OK &&
+            bme280_read_humidity(bme280_handle, &humidity) == ESP_OK &&
+            bme280_read_pressure(bme280_handle, &pressure) == ESP_OK) {
 
-        vTaskDelay(pdMS_TO_TICKS(5000));
+            ESP_LOGI(TAG, "Temp: %.1f°C, Humidity: %.1f%%, Pressure: %.0fhPa",
+                     temperature, humidity, pressure);
+
+            /* Update Zigbee attributes */
+            esp_app_temp_sensor_handler(temperature);
+            esp_app_humidity_sensor_handler(humidity);
+        } else {
+            ESP_LOGW(TAG, "Failed to read BME280 sensor");
+        }
+        /* Read every 30 seconds (battery friendly) */
+        vTaskDelay(pdMS_TO_TICKS(30000));
     }
 }
 
@@ -304,6 +347,6 @@ void app_main(void)
     /* Start Zigbee stack task */
     xTaskCreate(esp_zb_task, "Zigbee_main", 4096, NULL, 5, NULL);
 
-    /* Start fake sensor task */
-    xTaskCreate(fake_sensor_task, "Fake_Sensor", 2048, NULL, 4, NULL);
+    /* Start BME280 sensor task */
+    xTaskCreate(bme280_sensor_task, "BME280_Sensor", 2048, NULL, 4, NULL);
 }

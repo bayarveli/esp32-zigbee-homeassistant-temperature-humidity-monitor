@@ -1,3 +1,4 @@
 dependencies:
-  espressif/esp-zboss-lib: "~1.6.0"
-  espressif/esp-zigbee-lib: "~1.6.0"
+  espressif/esp-zboss-lib: ~1.6.0
+  espressif/esp-zigbee-lib: ~1.6.0
+  espressif/bme280: ^0.1.1
