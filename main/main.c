@@ -54,28 +54,6 @@ static int16_t zb_temperature_to_s16(float temp)
     return (int16_t)(temp * 100);
 }
 
-// static switch_func_pair_t button_func_pair[] = {
-//     {GPIO_INPUT_IO_TOGGLE_SWITCH, SWITCH_ONOFF_TOGGLE_CONTROL}
-// };
-
-// static void esp_app_buttons_handler(switch_func_pair_t *button_func_pair)
-// {
-//     if (button_func_pair->func == SWITCH_ONOFF_TOGGLE_CONTROL) {
-//         /* Send report attributes command */
-//         esp_zb_zcl_report_attr_cmd_t report_attr_cmd = {0};
-//         report_attr_cmd.address_mode = ESP_ZB_APS_ADDR_MODE_DST_ADDR_ENDP_NOT_PRESENT;
-//         report_attr_cmd.attributeID = ESP_ZB_ZCL_ATTR_TEMP_MEASUREMENT_VALUE_ID;
-//         report_attr_cmd.direction = ESP_ZB_ZCL_CMD_DIRECTION_TO_CLI;
-//         report_attr_cmd.clusterID = ESP_ZB_ZCL_CLUSTER_ID_TEMP_MEASUREMENT;
-//         report_attr_cmd.zcl_basic_cmd.src_endpoint = HA_ESP_SENSOR_ENDPOINT;
-
-//         esp_zb_lock_acquire(portMAX_DELAY);
-//         esp_zb_zcl_report_attr_cmd_req(&report_attr_cmd);
-//         esp_zb_lock_release();
-//         ESP_EARLY_LOGI(TAG, "Send 'report attributes' command");
-//     }
-// }
-
 static void esp_app_humidity_sensor_handler(float humidity)
 {
     uint16_t measured_value = (uint16_t)(humidity * 100);
